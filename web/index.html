@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>云托管 Notes CRUD</title>
+  <style>
+    :root {
+      --bg: #f4f1ea;
+      --card: #fffdf8;
+      --ink: #1f2933;
+      --muted: #6b7280;
+      --line: #e6dfd2;
+      --ok: #0f7b4c;
+      --bad: #b42318;
+      --accent: #c45c26;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "PingFang SC", "Hiragino Sans GB", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+    }
+    main { max-width: 760px; margin: 0 auto; padding: 32px 20px 64px; }
+    h1 { font-size: 28px; margin: 0 0 8px; }
+    .sub { color: var(--muted); margin-bottom: 24px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    .status {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+    .pill {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .pill.ok { background: #e8f6ee; color: var(--ok); }
+    .pill.bad { background: #fdecea; color: var(--bad); }
+    .meta { font-size: 13px; color: var(--muted); margin-top: 8px; line-height: 1.6; }
+    form { display: flex; gap: 8px; }
+    input, textarea {
+      flex: 1;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      font: inherit;
+    }
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 14px;
+      background: var(--accent);
+      color: white;
+      font: inherit;
+      cursor: pointer;
+    }
+    button.ghost { background: #efe8dd; color: var(--ink); }
+    button.danger { background: #b42318; }
+    ul { list-style: none; padding: 0; margin: 0; }
+    li {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    li:last-child { border-bottom: 0; }
+    .text { font-size: 16px; }
+    .time { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .actions { display: flex; gap: 8px; align-items: start; }
+    .empty { color: var(--muted); padding: 12px 0; }
+    code { font-size: 12px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Notes CRUD</h1>
+    <p class="sub">数据写在微信云托管同环境 MySQL 里。刷新页面后还在，说明库通了。</p>
+
+    <section class="card">
+      <div class="status">
+        <div>
+          <div id="dbPill" class="pill bad">检查数据库中</div>
+          <div id="dbMeta" class="meta"></div>
+        </div>
+        <button class="ghost" id="refreshDb">重新连接</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <form id="createForm">
+        <input id="textInput" maxlength="500" placeholder="写一条笔记，例如：杭州两日" required>
+        <button type="submit">新增</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <ul id="list"><li class="empty">加载中…</li></ul>
+    </section>
+  </main>
+  <script>
+    const listEl = document.getElementById('list')
+    const pill = document.getElementById('dbPill')
+    const meta = document.getElementById('dbMeta')
+
+    async function api(path, options) {
+      const res = await fetch(path, {
+        headers: { 'content-type': 'application/json' },
+        ...options,
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || res.statusText)
+      return data
+    }
+
+    async function loadDB() {
+      try {
+        const data = await api('/api/db')
+        pill.textContent = data.ok ? '数据库已连接' : '数据库未连接'
+        pill.className = 'pill ' + (data.ok ? 'ok' : 'bad')
+        meta.innerHTML = [
+          `地址 ${data.address}`,
+          `库 ${data.database}`,
+          `账号 ${data.user}`,
+          `密码 ${data.password === 'set' ? '已配置' : '未配置'}`,
+          data.error ? `错误：${data.error}` : '',
+        ].filter(Boolean).join('<br>')
+      } catch (err) {
+        pill.textContent = '数据库检查失败'
+        pill.className = 'pill bad'
+        meta.textContent = err.message
+      }
+    }
+
+    function render(notes) {
+      if (!notes.length) {
+        listEl.innerHTML = '<li class="empty">还没有笔记，上面输入一条试试。</li>'
+        return
+      }
+      listEl.innerHTML = notes.map(note => `
+        <li data-id="${note.id}">
+          <div>
+            <div class="text"></div>
+            <div class="time">#${note.id} · ${note.updatedAt}${note.openid ? ' · ' + note.openid : ''}</div>
+          </div>
+          <div class="actions">
+            <button class="ghost" data-edit>编辑</button>
+            <button class="danger" data-del>删除</button>
+          </div>
+        </li>
+      `).join('')
+      listEl.querySelectorAll('li[data-id]').forEach((li, i) => {
+        li.querySelector('.text').textContent = notes[i].text
+      })
+    }
+
+    async function loadNotes() {
+      try {
+        const data = await api('/api/notes')
+        render(data.notes || [])
+      } catch (err) {
+        listEl.innerHTML = `<li class="empty">${err.message}</li>`
+      }
+    }
+
+    document.getElementById('createForm').addEventListener('submit', async (e) => {
+      e.preventDefault()
+      const input = document.getElementById('textInput')
+      try {
+        await api('/api/notes', { method: 'POST', body: JSON.stringify({ text: input.value }) })
+        input.value = ''
+        await loadNotes()
+      } catch (err) {
+        alert(err.message)
+      }
+    })
+
+    listEl.addEventListener('click', async (e) => {
+      const li = e.target.closest('li[data-id]')
+      if (!li) return
+      const id = li.dataset.id
+      if (e.target.dataset.del !== undefined) {
+        if (!confirm('删除这条笔记？')) return
+        try {
+          await api('/api/notes/' + id, { method: 'DELETE' })
+          await loadNotes()
+        } catch (err) {
+          alert(err.message)
+        }
+      }
+      if (e.target.dataset.edit !== undefined) {
+        const next = prompt('修改内容', li.querySelector('.text').textContent)
+        if (next == null) return
+        try {
+          await api('/api/notes/' + id, { method: 'PUT', body: JSON.stringify({ text: next }) })
+          await loadNotes()
+        } catch (err) {
+          alert(err.message)
+        }
+      }
+    })
+
+    document.getElementById('refreshDb').addEventListener('click', async () => {
+      await loadDB()
+      await loadNotes()
+    })
+
+    loadDB()
+    loadNotes()
+  </script>
+</body>
+</html>

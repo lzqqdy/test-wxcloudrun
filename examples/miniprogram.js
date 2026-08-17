@@ -5,7 +5,7 @@ async function pingCloudRun() {
   wx.cloud.init()
 
   const env = '你的云托管环境ID'
-  const service = 'demo' // 控制台里的服务名称
+  const service = 'golang' // 控制台服务名，当前是 golang
 
   const ping = await wx.cloud.callContainer({
     config: { env },

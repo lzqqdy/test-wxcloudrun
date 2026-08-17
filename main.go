@@ -1,23 +1,36 @@
 package main
 
 import (
+	_ "embed"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
-	"sync"
 	"time"
 )
 
+//go:embed web/index.html
+var indexHTML []byte
+
 func main() {
+	go func() {
+		if err := initDB(); err != nil {
+			log.Printf("启动时数据库未就绪: %v", err)
+		}
+	}()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", indexHandler)
 	mux.HandleFunc("/health", healthHandler)
 	mux.HandleFunc("/api/ping", pingHandler)
+	mux.HandleFunc("/api/db", dbHandler)
 	mux.HandleFunc("/api/whoami", whoamiHandler)
 	mux.HandleFunc("/api/echo", echoHandler)
-	mux.HandleFunc("/api/notes", notesHandler)
+	mux.HandleFunc("GET /api/notes", notesCollectionHandler)
+	mux.HandleFunc("POST /api/notes", notesCollectionHandler)
+	mux.HandleFunc("GET /api/notes/{id}", noteItemHandler)
+	mux.HandleFunc("PUT /api/notes/{id}", noteItemHandler)
+	mux.HandleFunc("DELETE /api/notes/{id}", noteItemHandler)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -33,7 +46,7 @@ func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-WX-SERVICE")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -56,27 +69,18 @@ func indexHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, `<!doctype html>
-<html lang="zh-CN">
-<head><meta charset="utf-8"><title>test-wxcloudrun</title></head>
-<body>
-  <h1>微信云托管测试服务已启动</h1>
-  <p>可用接口：</p>
-  <ul>
-    <li><a href="/health">GET /health</a></li>
-    <li><a href="/api/ping">GET /api/ping</a></li>
-    <li><a href="/api/whoami">GET /api/whoami</a>（小程序 callContainer 会带上 openid）</li>
-    <li>POST /api/echo</li>
-    <li>GET/POST /api/notes</li>
-  </ul>
-</body>
-</html>`)
+	_, _ = w.Write(indexHTML)
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
+	dbMu.Lock()
+	conn := db
+	dbMu.Unlock()
+	dbOK := conn != nil && conn.Ping() == nil
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":   true,
 		"time": time.Now().Format(time.RFC3339),
+		"db":   dbOK,
 	})
 }
 
@@ -86,6 +90,10 @@ func pingHandler(w http.ResponseWriter, r *http.Request) {
 		"service": "test-wxcloudrun",
 		"time":    time.Now().Format(time.RFC3339),
 	})
+}
+
+func dbHandler(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, dbStatus())
 }
 
 func whoamiHandler(w http.ResponseWriter, r *http.Request) {
@@ -119,47 +127,4 @@ func echoHandler(w http.ResponseWriter, r *http.Request) {
 		"echo":   body,
 		"openid": r.Header.Get("X-WX-OPENID"),
 	})
-}
-
-type note struct {
-	ID      int    `json:"id"`
-	Text    string `json:"text"`
-	OpenID  string `json:"openid"`
-	Created string `json:"created"`
-}
-
-var (
-	notesMu sync.Mutex
-	notes   []note
-	nextID  = 1
-)
-
-func notesHandler(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		notesMu.Lock()
-		defer notesMu.Unlock()
-		writeJSON(w, http.StatusOK, map[string]any{"notes": notes})
-	case http.MethodPost:
-		var req struct {
-			Text string `json:"text"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Text == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "need json {\"text\":\"...\"}"})
-			return
-		}
-		notesMu.Lock()
-		item := note{
-			ID:      nextID,
-			Text:    req.Text,
-			OpenID:  r.Header.Get("X-WX-OPENID"),
-			Created: time.Now().Format(time.RFC3339),
-		}
-		nextID++
-		notes = append(notes, item)
-		notesMu.Unlock()
-		writeJSON(w, http.StatusOK, item)
-	default:
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "use GET or POST"})
-	}
 }
