@@ -134,7 +134,7 @@
           `地址 ${data.address}`,
           `库 ${data.database}`,
           `账号 ${data.user}`,
-          `密码 ${data.password === 'set' ? '已配置' : '未配置'}`,
+          `密码 ${data.password === 'set' ? '已配置（长度 ' + data.passwordLength + '）' : '未配置'}`,
           data.error ? `错误：${data.error}` : '',
         ].filter(Boolean).join('<br>')
       } catch (err) {
